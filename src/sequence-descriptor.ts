@@ -1,4 +1,4 @@
-import {Atom} from "@affinity-lab/carbonite";
+import type {Atom} from "@affinity-lab/carbonite";
 
 export default class SequenceDescriptor {
 	constructor(readonly atom: typeof Atom, readonly property: string, readonly grouping: string | null = null) {}

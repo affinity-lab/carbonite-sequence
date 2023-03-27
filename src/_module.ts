@@ -1,8 +1,28 @@
-import {DataSource, EntitySubscriberInterface, InsertEvent, RemoveEvent, UpdateEvent} from "typeorm";
-import {Atom} from "@affinity-lab/carbonite";
+import type {Atom} from "@affinity-lab/carbonite";
+import {ModuleManager} from "@affinity-lab/carbonite";
 import SequenceDescriptor from "./sequence-descriptor";
+import type {DataSource, EntitySubscriberInterface, InsertEvent, RemoveEvent, UpdateEvent} from "typeorm";
 
-export default class Subscriber implements EntitySubscriberInterface<Atom> {
+export default function Sequence(grouping: string | null = null) {
+	return function (target: Object, propertyKey: string) {
+		moduleManager.addDescriptor(new SequenceDescriptor(target.constructor as typeof Atom, propertyKey, grouping));
+	}
+}
+
+let moduleManager = new (class extends ModuleManager {
+
+	private descriptors: Array<SequenceDescriptor> = [];
+
+	async initialize(dataSource: DataSource) {
+		for (let descriptor of this.descriptors) {
+			dataSource.subscribers.push(new Subscriber(descriptor, dataSource))
+		}
+	}
+
+	addDescriptor(descriptor: SequenceDescriptor) { this.descriptors.push(descriptor);}
+})();
+
+class Subscriber implements EntitySubscriberInterface<Atom> {
 	constructor(readonly descriptor: SequenceDescriptor, readonly dataSource: DataSource) {}
 
 	public listenTo() {return this.descriptor.atom}
@@ -35,19 +55,22 @@ export default class Subscriber implements EntitySubscriberInterface<Atom> {
 	}
 
 	private async reorder(item: Atom) {
-		// await this.dataSource.createQueryRunner().query(`SET @pos:=-1`);
-		await this.dataSource.createQueryRunner().stream(
-			`UPDATE ${this.descriptor.table} 
+		let qr = this.dataSource.createQueryRunner();
+		await qr.query(`SET @pos:=-1`);
+		await qr.query(
+			`UPDATE ${this.descriptor.table}
 			SET ${this.descriptor.property} = (@pos := IF(@pos IS NULL, 0, @pos+1))
 			${(this.descriptor.grouping !== null ? `WHERE ${this.descriptor.grouping} <=> ? ` : '')}
 			ORDER BY ${this.descriptor.property}`,
 			[
 				item[this.descriptor.grouping]
 			]);
+		qr.release();
 	}
 
 	private async shift(item: Atom) {
-		await this.dataSource.createQueryRunner().stream(`UPDATE ${this.descriptor.table} 
+		let qr = this.dataSource.createQueryRunner();
+		await qr.query(`UPDATE ${this.descriptor.table}
 			SET ${this.descriptor.property} = ${this.descriptor.property} + 1
 			WHERE ${this.descriptor.property} >= ?
 			AND id != ?
@@ -57,6 +80,7 @@ export default class Subscriber implements EntitySubscriberInterface<Atom> {
 				item[this.descriptor.property],
 				item.id,
 				item[this.descriptor.grouping]
-			])
+			]);
+		qr.release();
 	}
 }
